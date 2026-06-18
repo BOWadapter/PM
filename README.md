@@ -343,6 +343,56 @@ export default function App() {
 | `Image` | Carga de imágenes desde URL |
 | `ActivityIndicator` | Spinner de carga mientras se obtienen los datos |
 
+Custom Hooks en React Native
+¿Qué es un Custom Hook?
+Un Custom Hook es una función de JavaScript cuyo nombre empieza con use y que permite extraer y reutilizar lógica de estado entre componentes. Internamente puede usar los hooks nativos de React (useState, useEffect, etc.).
+La regla es simple: si dos componentes comparten la misma lógica, o si un componente tiene demasiada lógica mezclada con su interfaz, esa lógica se puede mover a un Custom Hook.
+El problema que resuelve
+Antes, nuestra pantalla HomeScreen hacía dos cosas a la vez:
+
+Obtener los datos (de dónde vienen los productos, buscar el artesano de cada uno)
+Mostrar los datos (la lista, las tarjetas, los estilos)
+
+Cuando un componente mezcla "de dónde saco los datos" con "cómo los dibujo", se vuelve difícil de mantener y de probar. Esto viola el principio de Separación de Responsabilidades.
+La solución
+Movemos toda la lógica de datos a un Custom Hook llamado useProductos. La pantalla deja de preocuparse por el origen de los datos y solo los consume.
+tsexport function useProductos() {
+  const [productos, setProductos] = useState<Producto[]>([]);
+  const [cargando, setCargando] = useState<boolean>(true);
+
+  useEffect(() => {
+    setProductos(productosMock);
+    setCargando(false);
+  }, []);
+
+  const getArtesano = (artesanoId: number) => {
+    return artesanos.find(a => a.id === artesanoId);
+  };
+
+  return { productos, cargando, getArtesano };
+}
+Cómo funciona por dentro
+
+useState crea dos piezas de estado: la lista de productos y un booleano cargando que indica si los datos aún se están obteniendo.
+useEffect se ejecuta una sola vez cuando el componente se monta (gracias al arreglo de dependencias vacío []). Aquí simulamos la carga de datos. Más adelante, esta es la única parte que cambiará cuando conectemos una API real.
+return entrega un objeto con todo lo que la pantalla necesita: los datos, el estado de carga y la función auxiliar.
+
+Cómo se usa en la pantalla
+La pantalla queda mucho más limpia. Una sola línea reemplaza toda la lógica anterior:
+tsxconst { productos, cargando, getArtesano } = useProductos();
+A partir de ahí, HomeScreen solo se encarga de dibujar. Si cargando es verdadero, muestra un spinner; si no, muestra la lista.
+Ventajas
+
+Reutilización: cualquier otra pantalla puede usar useProductos() sin reescribir la lógica.
+Mantenibilidad: si cambia el origen de los datos, solo se modifica el hook; las pantallas no se tocan.
+Legibilidad: la pantalla expresa claramente qué hace, sin ruido de cómo obtiene los datos.
+Preparación para la API: cuando pasemos de datos de prueba a una API real con fetch, solo cambia el interior del useEffect.
+
+Reglas de los Hooks
+
+Solo se llaman en el nivel superior del componente o de otro hook, nunca dentro de condicionales, ciclos o funciones anidadas.
+Solo se llaman desde componentes de React o desde otros Custom Hooks.
+El nombre debe empezar con use para que React los reconozca.
 ---
 
 ## Siguiente paso
