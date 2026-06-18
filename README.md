@@ -54,7 +54,8 @@ mi-proyecto-nuevo/
 │   ├── components/             ← (próximamente)
 │   ├── services/
 │   │   └── artesaniaService.ts ← Datos de artesanos y productos
-│   ├── hooks/                  ← (próximamente)
+│   ├── hooks/
+│   │   └── useProductos.ts     ← Custom Hook de carga de datos
 │   └── types/
 │       └── index.ts            ← Tipos TypeScript del dominio
 ├── assets/
@@ -82,9 +83,9 @@ Cada carpeta tiene una única responsabilidad:
 
 `artesaniaService.ts` centraliza todos los datos en un solo lugar. Cuando conectemos la API real, solo modificamos este archivo y el resto de la app no cambia.
 
-### 3. Custom Hooks *(próximamente)*
+### 3. Custom Hooks
 
-Se implementarán para encapsular la lógica de consumo de datos y separarla de las pantallas.
+`useProductos.ts` encapsula la lógica de obtención de datos y el estado de carga, separándola de la pantalla. `HomeScreen` ya no sabe de dónde vienen los datos: solo consume el hook. Cuando se conecte la API real, únicamente cambia el hook.
 
 ---
 
@@ -186,17 +187,41 @@ export const productos: Producto[] = [
 
 ---
 
+## Custom Hook — `src/hooks/useProductos.ts`
+
+```ts
+import { useState, useEffect } from 'react';
+import { productos as productosMock, artesanos } from '../services/artesaniaService';
+import { Producto, Artesano } from '../types/index';
+
+export function useProductos() {
+  const [productos, setProductos] = useState<Producto[]>([]);
+  const [cargando, setCargando] = useState<boolean>(true);
+
+  useEffect(() => {
+    setProductos(productosMock);
+    setCargando(false);
+  }, []);
+
+  const getArtesano = (artesanoId: number): Artesano | undefined => {
+    return artesanos.find(a => a.id === artesanoId);
+  };
+
+  return { productos, cargando, getArtesano };
+}
+```
+
+---
+
 ## Pantalla principal — `src/screens/HomeScreen.tsx`
 
 ```tsx
-import { View, Text, StyleSheet, FlatList, Image, TouchableOpacity, Alert } from 'react-native';
-import { productos, artesanos } from '../services/artesaniaService';
+import { View, Text, StyleSheet, FlatList, Image, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import { useProductos } from '../hooks/useProductos';
 import { Producto } from '../types/index';
 
 export default function HomeScreen() {
-  const getArtesano = (artesanoId: number) => {
-    return artesanos.find(a => a.id === artesanoId);
-  };
+  const { productos, cargando, getArtesano } = useProductos();
 
   const handleOfertar = (producto: Producto) => {
     const nuevaOferta = producto.precioActual + 100;
@@ -232,6 +257,15 @@ export default function HomeScreen() {
     );
   };
 
+  if (cargando) {
+    return (
+      <View style={styles.centrado}>
+        <ActivityIndicator size="large" color="#3b82f6" />
+        <Text style={styles.cargandoTexto}>Cargando subastas...</Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <FlatList
@@ -246,6 +280,8 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5' },
+  centrado: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f5f5f5' },
+  cargandoTexto: { marginTop: 12, fontSize: 14, color: '#666' },
   lista: { padding: 16, gap: 16 },
   card: { backgroundColor: '#fff', borderRadius: 12, overflow: 'hidden', elevation: 3 },
   imagen: { width: '100%', height: 180 },
@@ -305,12 +341,13 @@ export default function App() {
 | `TouchableOpacity` | Interacción táctil con retroalimentación visual |
 | `Alert` | Diálogos nativos de confirmación |
 | `Image` | Carga de imágenes desde URL |
+| `ActivityIndicator` | Spinner de carga mientras se obtienen los datos |
 
 ---
 
 ## Siguiente paso
 
-Conectar `services/` a una API real y aplicar el patrón **Custom Hooks** para encapsular la lógica de peticiones.
+Conectar el Custom Hook `useProductos` a una API real mediante `fetch`, manejando estados de carga y error.
 
 ---
 
