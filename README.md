@@ -343,64 +343,38 @@ export default function App() {
 | `Image` | Carga de imágenes desde URL |
 | `ActivityIndicator` | Spinner de carga mientras se obtienen los datos |
 
-Custom Hooks en React Native
-¿Qué es un Custom Hook?
-Un Custom Hook es una función de JavaScript cuyo nombre empieza con use y que permite extraer y reutilizar lógica de estado entre componentes. Internamente puede usar los hooks nativos de React (useState, useEffect, etc.).
-La regla es simple: si dos componentes comparten la misma lógica, o si un componente tiene demasiada lógica mezclada con su interfaz, esa lógica se puede mover a un Custom Hook.
-El problema que resuelve
-Antes, nuestra pantalla HomeScreen hacía dos cosas a la vez:
 
-Obtener los datos (de dónde vienen los productos, buscar el artesano de cada uno)
-Mostrar los datos (la lista, las tarjetas, los estilos)
+# Custom Hooks en React Native
 
-Cuando un componente mezcla "de dónde saco los datos" con "cómo los dibujo", se vuelve difícil de mantener y de probar. Esto viola el principio de Separación de Responsabilidades.
-La solución
-Movemos toda la lógica de datos a un Custom Hook llamado useProductos. La pantalla deja de preocuparse por el origen de los datos y solo los consume.
-tsexport function useProductos() {
-  const [productos, setProductos] = useState<Producto[]>([]);
-  const [cargando, setCargando] = useState<boolean>(true);
+**Programación Móvil · Universidad Politécnica de Querétaro · Mayo–Agosto 2026**
 
-  useEffect(() => {
-    setProductos(productosMock);
-    setCargando(false);
-  }, []);
+---
 
-  const getArtesano = (artesanoId: number) => {
-    return artesanos.find(a => a.id === artesanoId);
-  };
+## ¿Qué es un Custom Hook?
 
-  return { productos, cargando, getArtesano };
-}
-Cómo funciona por dentro
+Un Custom Hook es una función de JavaScript cuyo nombre empieza con `use` y que permite **reutilizar lógica de estado** entre varios componentes. En lugar de repetir el mismo código (cargar datos, manejar un estado de carga, calcular valores) en cada pantalla, ese comportamiento se extrae a una función independiente que cualquier componente puede invocar.
 
-useState crea dos piezas de estado: la lista de productos y un booleano cargando que indica si los datos aún se están obteniendo.
-useEffect se ejecuta una sola vez cuando el componente se monta (gracias al arreglo de dependencias vacío []). Aquí simulamos la carga de datos. Más adelante, esta es la única parte que cambiará cuando conectemos una API real.
-return entrega un objeto con todo lo que la pantalla necesita: los datos, el estado de carga y la función auxiliar.
+Es importante entender que un Custom Hook **no devuelve interfaz** (no retorna JSX): devuelve datos y funciones. La pantalla se encarga de mostrar; el hook se encarga de la lógica.
 
-Cómo se usa en la pantalla
-La pantalla queda mucho más limpia. Una sola línea reemplaza toda la lógica anterior:
-tsxconst { productos, cargando, getArtesano } = useProductos();
-A partir de ahí, HomeScreen solo se encarga de dibujar. Si cargando es verdadero, muestra un spinner; si no, muestra la lista.
-Ventajas
+---
 
-Reutilización: cualquier otra pantalla puede usar useProductos() sin reescribir la lógica.
-Mantenibilidad: si cambia el origen de los datos, solo se modifica el hook; las pantallas no se tocan.
-Legibilidad: la pantalla expresa claramente qué hace, sin ruido de cómo obtiene los datos.
-Preparación para la API: cuando pasemos de datos de prueba a una API real con fetch, solo cambia el interior del useEffect.
+## ¿Por qué usarlos?
 
-Reglas de los Hooks
+En el proyecto Artisan Auction, la pantalla `HomeScreen` originalmente importaba los datos directamente y se encargaba de todo: obtener los productos, buscar el artesano de cada uno y mostrarlos. Esto mezcla dos responsabilidades distintas en un solo archivo.
 
-Solo se llaman en el nivel superior del componente o de otro hook, nunca dentro de condicionales, ciclos o funciones anidadas.
-Solo se llaman desde componentes de React o desde otros Custom Hooks.
-El nombre debe empezar con use para que React los reconozca.
+Al mover la lógica de datos a un Custom Hook conseguimos:
 
-Paso 1 — Renombrar el archivo de tipos
-En VS Code, clic derecho sobre src/types/index.tsx → Rename → cámbialo a index.ts
-(Es solo cosmético pero correcto: el .tsx es para archivos con JSX, y este solo tiene tipos.)
+- **Separación de responsabilidades:** la pantalla solo muestra; el hook gestiona los datos.
+- **Reutilización:** si otra pantalla necesita los mismos productos, llama al mismo hook.
+- **Mantenibilidad:** cuando se conecte la API real, solo se modifica el hook, no las pantallas.
+- **Legibilidad:** la pantalla queda más corta y fácil de leer.
 
-Paso 2 — Crear el Custom Hook
-Crea el archivo src/hooks/useProductos.ts y pega esto:
-tsimport { useState, useEffect } from 'react';
+---
+
+## Implementación — `src/hooks/useProductos.ts`
+
+```ts
+import { useState, useEffect } from 'react';
 import { productos as productosMock, artesanos } from '../services/artesaniaService';
 import { Producto, Artesano } from '../types/index';
 
@@ -419,103 +393,69 @@ export function useProductos() {
 
   return { productos, cargando, getArtesano };
 }
+```
 
-Paso 3 — Conectar el hook en HomeScreen
-Reemplaza todo el contenido de src/screens/HomeScreen.tsx con esto. La diferencia clave es que ya no importa los datos directamente, sino que usa el hook:
-tsximport { View, Text, StyleSheet, FlatList, Image, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
-import { useProductos } from '../hooks/useProductos';
-import { Producto } from '../types/index';
+---
 
-export default function HomeScreen() {
-  const { productos, cargando, getArtesano } = useProductos();
+## Análisis del código
 
-  const handleOfertar = (producto: Producto) => {
-    const nuevaOferta = producto.precioActual + 100;
-    Alert.alert(
-      'Confirmar oferta',
-      `¿Deseas ofertar $${nuevaOferta} por ${producto.nombre}?`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { text: 'Ofertar', onPress: () => Alert.alert('Oferta enviada', `Tu oferta de $${nuevaOferta} fue registrada.`) },
-      ]
-    );
-  };
+El hook utiliza dos Hooks nativos de React:
 
-  const renderProducto = ({ item }: { item: Producto }) => {
-    const artesano = getArtesano(item.artesanoId);
-    return (
-      <View style={styles.card}>
-        <Image source={{ uri: item.imagen }} style={styles.imagen} />
-        <View style={styles.info}>
-          <Text style={styles.nombre}>{item.nombre}</Text>
-          <Text style={styles.artesano}>{artesano?.nombre} · {artesano?.ubicacion}</Text>
-          <Text style={styles.descripcion}>{item.descripcion}</Text>
-          <View style={styles.precios}>
-            <Text style={styles.precioLabel}>Precio actual:</Text>
-            <Text style={styles.precio}>${item.precioActual}</Text>
-          </View>
-          <Text style={styles.fecha}>Cierra: {item.fechaFin}</Text>
-          <TouchableOpacity style={styles.boton} onPress={() => handleOfertar(item)}>
-            <Text style={styles.botonTexto}>Hacer oferta +$100</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  };
+**`useState`** crea variables de estado. Aquí se declaran dos: `productos` (la lista que se mostrará, inicia vacía) y `cargando` (un booleano que indica si los datos aún se están obteniendo, inicia en `true`). Cada vez que se actualiza un estado con su función `set`, el componente que usa el hook se vuelve a renderizar.
 
-  if (cargando) {
-    return (
-      <View style={styles.centrado}>
-        <ActivityIndicator size="large" color="#3b82f6" />
-        <Text style={styles.cargandoTexto}>Cargando subastas...</Text>
-      </View>
-    );
-  }
+**`useEffect`** ejecuta código en momentos específicos del ciclo de vida del componente. El arreglo vacío `[]` al final indica que el efecto se ejecuta **una sola vez**, cuando el componente se monta. Dentro se cargan los datos de prueba y se cambia `cargando` a `false`. Más adelante, este es el punto donde se hará la petición a la API real.
 
+**`getArtesano`** es una función auxiliar que, dado el `artesanoId` de un producto, devuelve el objeto completo del artesano. Se incluye en el hook porque es lógica relacionada con los datos.
+
+Finalmente, el hook **retorna un objeto** con `productos`, `cargando` y `getArtesano`. Eso es lo que la pantalla recibirá al llamarlo.
+
+---
+
+## Uso en la pantalla
+
+La pantalla consume el hook con una sola línea, usando desestructuración:
+
+```tsx
+const { productos, cargando, getArtesano } = useProductos();
+```
+
+A partir de ahí, `HomeScreen` ya no sabe de dónde vienen los datos ni cómo se cargan. Solo los usa. Además, aprovecha el estado `cargando` para mostrar un indicador mientras los datos no están listos:
+
+```tsx
+if (cargando) {
   return (
-    <View style={styles.container}>
-      <FlatList
-        data={productos}
-        keyExtractor={item => item.id.toString()}
-        renderItem={renderProducto}
-        contentContainerStyle={styles.lista}
-      />
+    <View style={styles.centrado}>
+      <ActivityIndicator size="large" color="#3b82f6" />
+      <Text>Cargando subastas...</Text>
     </View>
   );
 }
+```
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
-  centrado: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f5f5f5' },
-  cargandoTexto: { marginTop: 12, fontSize: 14, color: '#666' },
-  lista: { padding: 16, gap: 16 },
-  card: { backgroundColor: '#fff', borderRadius: 12, overflow: 'hidden', elevation: 3 },
-  imagen: { width: '100%', height: 180 },
-  info: { padding: 12, gap: 6 },
-  nombre: { fontSize: 18, fontWeight: 'bold', color: '#1a1a1a' },
-  artesano: { fontSize: 13, color: '#888' },
-  descripcion: { fontSize: 14, color: '#555' },
-  precios: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
-  precioLabel: { fontSize: 14, color: '#555' },
-  precio: { fontSize: 20, fontWeight: 'bold', color: '#3b82f6' },
-  fecha: { fontSize: 12, color: '#aaa' },
-  boton: { backgroundColor: '#3b82f6', borderRadius: 8, paddingVertical: 10, alignItems: 'center', marginTop: 8 },
-  botonTexto: { color: '#fff', fontWeight: 'bold', fontSize: 15 },
-});
-
-Paso 4 — Probar
-powershellnpx expo start --clear
-Verás un breve spinner "Cargando subastas..." y luego la lista. Eso confirma que el hook funciona.
-
-Paso 5 — Subir a GitHub
-powershellgit add .
-git commit -m "feat: Custom Hook useProductos y renombrado de tipos"
-git push
 ---
 
-## Siguiente paso
+## Reglas de los Hooks
 
-Conectar el Custom Hook `useProductos` a una API real mediante `fetch`, manejando estados de carga y error.
+Para que los Hooks funcionen correctamente, React establece dos reglas:
+
+1. **Solo se llaman en el nivel superior** de un componente o de otro Hook. Nunca dentro de condicionales, bucles o funciones anidadas.
+2. **Solo se llaman desde componentes de React o desde otros Custom Hooks.** No desde funciones de JavaScript comunes.
+
+La convención del prefijo `use` no es decorativa: es lo que permite a las herramientas de desarrollo verificar que estas reglas se cumplan.
+
+---
+
+## Conexión con los patrones de diseño del proyecto
+
+Este Custom Hook es la tercera pieza del esquema de patrones del proyecto Artisan Auction:
+
+| Patrón | Archivo | Responsabilidad |
+|---|---|---|
+| Separation of Concerns | estructura `src/` | Cada carpeta una responsabilidad |
+| Repository Pattern | `services/artesaniaService.ts` | Centralizar el origen de los datos |
+| Custom Hooks | `hooks/useProductos.ts` | Encapsular la lógica de datos y estado |
+
+Juntos logran que la capa de datos, la lógica y la presentación estén separadas, que es el objetivo de una arquitectura mantenible.
 
 ---
 
