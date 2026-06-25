@@ -458,92 +458,68 @@ Este Custom Hook es la tercera pieza del esquema de patrones del proyecto Artisa
 Juntos logran que la capa de datos, la lógica y la presentación estén separadas, que es el objetivo de una arquitectura mantenible.
 
 ---
-
-# Conexión a SQLite y módulo "Perfil de Artesano"
+# Conexión a base de datos SQLite
 
 **Programación Móvil (UPQDPEFO002) · Universidad Politécnica de Querétaro**
 **Periodo Mayo–Agosto 2026 · Unidad II — Diseño de aplicaciones móviles**
 **Proyecto integrador: Artisan Auction · React Native + Expo SDK 54**
 
----
-
-## 1. ¿Qué vamos a construir?
-
-Hasta ahora los datos de la app vivían **en memoria** (arreglos dentro de `artesaniaService.ts`). Eso significa que se recargan cada vez que abres la app y no hay forma de guardarlos.
-
-En este avance hacemos dos cosas:
-
-1. **Conectamos una base de datos SQLite local** en el dispositivo con `expo-sqlite`. Los datos pasan a vivir en una base de datos real, con tablas y consultas SQL.
-2. **Agregamos un módulo nuevo:** el **perfil de cada artesano**, donde se ve su información y las piezas que tiene en subasta.
-
-Lo importante no es solo "usar una base de datos", sino hacerlo **bien organizado**. Por eso seguimos tres patrones de diseño que ya veníamos trabajando: Separation of Concerns, Repository Pattern y Custom Hooks.
+> **Parte 1 de 2.** Aquí conectamos la base de datos SQLite a la app que ya tienes, **sin agregar pantallas nuevas**. En la **Parte 2** construiremos encima el módulo de Artesanos.
 
 ---
 
-## 2. Arquitectura en 4 capas
+## 1. ¿Qué vamos a hacer?
 
-La app se organiza en cuatro capas. **Cada capa solo conoce a la de abajo**: una pantalla nunca habla directamente con SQLite, sino que pide los datos a un hook, el hook al repositorio, y solo el repositorio sabe que por debajo hay una base de datos.
+Hasta ahora los datos de la app vivían **en memoria** (arreglos dentro de `artesaniaService.ts`). Eso significa que no hay forma real de guardarlos: solo existen mientras la app está abierta.
+
+En esta parte le damos **persistencia** conectando una base de datos **SQLite local** en el dispositivo con `expo-sqlite`. Al terminar, la pantalla de Inicio se verá **idéntica**, pero la lista de productos saldrá de una base de datos real en lugar de un arreglo. Todavía **no** creamos pantallas nuevas.
+
+---
+
+## 2. Arquitectura (la parte que tocamos)
+
+La app se organiza en capas donde **cada capa solo conoce a la de abajo**. En esta parte trabajamos las tres capas inferiores; la pantalla de Inicio ya existe y no se modifica.
 
 ```mermaid
 flowchart TD
-    A["Pantallas (UI)<br/>HomeScreen · ArtesanosScreen · PerfilArtesanoScreen"]
-    B["Custom Hooks<br/>useProductos · useArtesanos"]
+    A["HomeScreen (ya existe, NO cambia)"]
+    B["useProductos<br/>src/hooks/"]
     C["Repositorio (Repository Pattern)<br/>artesaniaService.ts"]
-    D["Base de datos SQLite<br/>db.ts → tablas: artesanos, productos, ofertas"]
+    D["Base de datos SQLite<br/>db.ts"]
     A -->|usa| B
     B -->|consulta| C
     C -->|ejecuta SQL| D
 ```
 
-> Las llamadas **bajan** (la pantalla pide datos) y los datos **regresan** por el mismo camino hacia arriba.
-
-| Capa | Archivo(s) | Responsabilidad |
-|------|-----------|-----------------|
-| **Pantallas** | `src/screens/` | Mostrar la interfaz y reaccionar al usuario. No saben de dónde vienen los datos. |
-| **Custom Hooks** | `src/hooks/` | Encapsular la lógica de estado (`useState`, `useEffect`) y pedir los datos al repositorio. |
-| **Repositorio** | `src/services/artesaniaService.ts` | Único punto que sabe consultar la base de datos. Expone funciones como `obtenerArtesanos()`. |
-| **Base de datos** | `src/database/db.ts` | Abrir la conexión SQLite, crear las tablas y sembrar los datos iniciales. |
-
-**¿Por qué tanta separación?** Porque permite cambiar una capa sin romper las demás. En este avance cambiamos la fuente de datos (de arreglos en memoria a SQLite) y **las pantallas no necesitaron ni un cambio**. Ese es el objetivo del patrón.
+> **Regla de oro:** una pantalla nunca toca SQLite directamente. Pide los datos a un hook, el hook al repositorio, y solo el repositorio sabe que por debajo hay una base de datos. Gracias a esto, cambiar la fuente de datos (de arreglos a SQLite) **no obliga a tocar `HomeScreen`**.
 
 ---
 
-## 3. Estructura de archivos (al terminar)
+## 3. Archivos que tocamos en esta parte
 
 ```
 src/
 ├── database/
-│   └── db.ts                      ← NUEVO: conexión + esquema + datos semilla
+│   └── db.ts                  ← NUEVO: conexión + esquema + datos semilla
 ├── services/
-│   └── artesaniaService.ts        ← MODIFICADO: ahora consulta SQLite (repositorio)
-├── hooks/
-│   ├── useProductos.ts            ← MODIFICADO: lee desde SQLite (misma API pública)
-│   └── useArtesanos.ts            ← NUEVO: lista y detalle de artesanos
-├── screens/
-│   ├── HomeScreen.tsx             ← SIN CAMBIOS
-│   ├── PerfilScreen.tsx           ← (perfil del usuario, ya existente)
-│   ├── ArtesanosScreen.tsx        ← NUEVO: lista de artesanos
-│   └── PerfilArtesanoScreen.tsx   ← NUEVO: perfil del artesano + sus piezas
-├── types/
-│   ├── index.ts                   ← tipos Artesano, Producto, Oferta (ya existente)
-│   └── navigation.ts              ← NUEVO: tipos de navegación
-└── App.tsx                        ← MODIFICADO: pestaña "Artesanos" con Stack anidado
+│   └── artesaniaService.ts    ← MODIFICADO: ahora consulta SQLite (repositorio)
+└── hooks/
+    └── useProductos.ts        ← MODIFICADO: lee desde SQLite (misma API pública)
 ```
 
 ---
 
-## 4. Dependencias
+## 4. Dependencia
 
 ```powershell
 npx expo install expo-sqlite
-npx expo install @react-navigation/native-stack
 ```
 
-> Usa **`npx expo install`** (no `npm install`) para que Expo instale automáticamente las versiones compatibles con el SDK 54. `native-stack` reutiliza `react-native-screens` y `react-native-safe-area-context`, que ya estaban instalados para las pestañas.
+> Usa **`npx expo install`** (no `npm install`) para que Expo instale la versión compatible con el SDK 54. Todavía **NO** instalamos `native-stack`; eso es de la Parte 2.
 
 ---
 
-## 5. Implementación paso a paso
+## 5. Pasos
 
 ### Paso 1 — Conexión y esquema SQLite
 
@@ -645,12 +621,14 @@ async function sembrarDatos(db: SQLite.SQLiteDatabase): Promise<void> {
 - `openDatabaseAsync` abre (o crea) el archivo de la base de datos.
 - `execAsync` ejecuta varias sentencias SQL de golpe (ideal para crear tablas).
 - `PRAGMA foreign_keys = ON` activa las llaves foráneas: `productos.artesanoId` apunta a `artesanos.id`.
-- La función `sembrarDatos` solo inserta si la tabla está vacía, para no duplicar.
-- La tabla `ofertas` queda lista para el futuro módulo de pujas (todavía no se usa).
+- `sembrarDatos` solo inserta si la tabla está vacía, para no duplicar.
+- Creamos también la tabla `ofertas` desde ahora, lista para un futuro módulo de pujas (todavía no se usa).
+
+> Si tu producto 3 tenía valores distintos, copia los tuyos al arreglo `productosSemilla`.
 
 ### Paso 2 — Repositorio (Repository Pattern)
 
-`artesaniaService.ts` deja de tener arreglos y pasa a ser el **repositorio**: el único archivo que sabe consultar SQLite.
+`artesaniaService.ts` deja de tener arreglos y pasa a ser el **repositorio**: el único archivo que sabe consultar SQLite. En esta parte solo necesitamos las funciones de productos y de artesanos que usa `useProductos`.
 
 ```ts
 // src/services/artesaniaService.ts
@@ -663,30 +641,16 @@ export async function obtenerArtesanos(): Promise<Artesano[]> {
   return db.getAllAsync<Artesano>('SELECT * FROM artesanos ORDER BY nombre');
 }
 
-export async function obtenerArtesanoPorId(id: number): Promise<Artesano | null> {
-  const db = await getDatabase();
-  return db.getFirstAsync<Artesano>('SELECT * FROM artesanos WHERE id = ?', id);
-}
-
 // ── Productos ──────────────────────────────────────────────────────────
 export async function obtenerProductos(): Promise<Producto[]> {
   const db = await getDatabase();
   return db.getAllAsync<Producto>('SELECT * FROM productos');
 }
-
-export async function obtenerProductosPorArtesano(artesanoId: number): Promise<Producto[]> {
-  const db = await getDatabase();
-  return db.getAllAsync<Producto>(
-    'SELECT * FROM productos WHERE artesanoId = ?',
-    artesanoId
-  );
-}
 ```
 
 **Qué aprender aquí:**
 - `getAllAsync<T>(sql)` devuelve un arreglo de filas tipado como `T[]`.
-- `getFirstAsync<T>(sql, param)` devuelve la primera fila o `null`.
-- El `?` es un **parámetro**: evita errores y problemas de seguridad (nunca concatenes valores directo en el SQL).
+- En la Parte 2 le agregaremos a este mismo archivo dos funciones más (para buscar un artesano y sus productos).
 
 ### Paso 3 — Hook de productos (actualizar)
 
@@ -725,9 +689,181 @@ export function useProductos() {
 
 **Qué aprender aquí:**
 - `Promise.all` lanza las dos consultas en paralelo (más rápido que una tras otra).
-- La bandera `activo` es buena práctica: si el usuario sale de la pantalla antes de que termine la consulta, no intentamos actualizar el estado de un componente que ya no existe.
+- La bandera `activo` evita actualizar el estado de un componente que el usuario ya cerró.
 
-### Paso 4 — Hook de artesanos (nuevo)
+> Si VS Code marca un error de importación de `artesanos`/`productos`, es el `useProductos` viejo que estás reemplazando; al guardar este nuevo, el error desaparece.
+
+---
+
+## 6. Probar
+
+```powershell
+npx expo start --clear
+```
+
+Verifica en el celular:
+
+- [ ] La pantalla de **Inicio** se ve **idéntica** a como estaba.
+- [ ] La lista de productos aparece sin errores (ahora viene de SQLite, no del arreglo).
+
+Si la lista carga bien, la conexión ya funciona. Sube los cambios:
+
+```powershell
+git add .
+git commit -m "feat: conexion a base de datos SQLite con expo-sqlite"
+git push origin main
+```
+
+> Si el `push` se rechaza porque el remoto tiene commits que no están en local, ejecuta primero `git pull origin main` y vuelve a empujar.
+
+---
+
+## 7. Conceptos clave
+
+- **API asíncrona de `expo-sqlite`:** `openDatabaseAsync`, `execAsync`, `getAllAsync`, `getFirstAsync` y `runAsync`. Todas devuelven promesas, por eso usamos `async/await`.
+- **Persistencia:** una vez sembrada, la base de datos **vive en el dispositivo** y sobrevive a reinicios de la app.
+- **Llaves foráneas (`artesanoId`):** relacionan un producto con su artesano.
+- **Repository Pattern:** el repositorio es el único que sabe consultar la base; mañana podríamos cambiar SQLite por una API en la nube tocando solo esa capa.
+- **Custom Hooks:** separan la lógica de datos de la interfaz; por eso la pantalla no cambió.
+- **Re-sembrado:** como `sembrarDatos` solo inserta si la tabla está vacía, si cambias los datos semilla **no se reflejarán** hasta que desinstales la app (o borres su almacenamiento) y la vuelvas a abrir.
+
+---
+
+## 8. Siguiente
+
+Cuando confirmes que **Inicio funciona desde SQLite**, continúa con la **Parte 2 — Módulo "Perfil de Artesano"**, donde agregaremos la pestaña de Artesanos con su lista y perfil.
+
+---
+
+#  Módulo "Perfil de Artesano"
+
+**Programación Móvil (UPQDPEFO002) · Universidad Politécnica de Querétaro**
+**Periodo Mayo–Agosto 2026 · Unidad II — Diseño de aplicaciones móviles**
+**Proyecto integrador: Artisan Auction · React Native + Expo SDK 54**
+
+> **Parte 2 de 2.** Requiere haber completado la **Parte 1 — Conexión a base de datos SQLite** (la app debe correr leyendo datos desde SQLite). Aquí construimos encima el módulo de Artesanos.
+
+---
+
+## 1. ¿Qué vamos a hacer?
+
+Sobre la base de la Parte 1, agregamos un **módulo nuevo**: una pestaña **Artesanos** que muestra la lista de artesanos y, al tocar uno, abre su **perfil** con las piezas que tiene en subasta. De paso aprendemos **navegación tipo Stack anidada** dentro de una pestaña.
+
+---
+
+## 2. Requisito previo
+
+Antes de empezar, confirma que la **Parte 1 está completa**:
+
+- [ ] Existe `src/database/db.ts` con la conexión y el sembrado.
+- [ ] `src/services/artesaniaService.ts` ya es el repositorio (consulta SQLite).
+- [ ] `src/hooks/useProductos.ts` lee desde SQLite y la pantalla de Inicio funciona.
+
+La tabla `artesanos` ya quedó sembrada en la Parte 1, así que aquí solo agregamos consultas y pantallas.
+
+---
+
+## 3. Arquitectura (lo nuevo)
+
+Las pantallas nuevas siguen la misma regla: hablan con un hook, el hook con el repositorio, y el repositorio con SQLite.
+
+```mermaid
+flowchart TD
+    A["ArtesanosScreen → PerfilArtesanoScreen<br/>src/screens/ (NUEVAS)"]
+    B["useArtesanos<br/>src/hooks/ (NUEVO)"]
+    C["Repositorio<br/>artesaniaService.ts (+2 funciones)"]
+    D["Base de datos SQLite<br/>db.ts (sin cambios)"]
+    A -->|usa| B
+    B -->|consulta| C
+    C -->|ejecuta SQL| D
+```
+
+**Navegación:** la pestaña **Artesanos** contendrá un **Stack** con dos pantallas (Lista → Perfil), para poder navegar y regresar dentro de la misma pestaña.
+
+```mermaid
+flowchart TD
+    T["Tab.Navigator"] --> I["Inicio"]
+    T --> AR["Artesanos (Stack)"]
+    T --> P["Perfil (usuario)"]
+    AR --> L["ListaArtesanos"]
+    AR --> PA["PerfilArtesano"]
+    L -->|navigate con artesanoId| PA
+```
+
+---
+
+## 4. Archivos que tocamos en esta parte
+
+```
+src/
+├── services/
+│   └── artesaniaService.ts        ← MODIFICADO: +2 funciones de artesano
+├── hooks/
+│   └── useArtesanos.ts            ← NUEVO: lista y detalle de artesanos
+├── screens/
+│   ├── ArtesanosScreen.tsx        ← NUEVO: lista de artesanos
+│   └── PerfilArtesanoScreen.tsx   ← NUEVO: perfil del artesano + sus piezas
+├── types/
+│   └── navigation.ts              ← NUEVO: tipos de navegación
+└── App.tsx                        ← MODIFICADO: pestaña "Artesanos" con Stack anidado
+```
+
+---
+
+## 5. Dependencia
+
+```powershell
+npx expo install @react-navigation/native-stack
+```
+
+> `native-stack` reutiliza `react-native-screens` y `react-native-safe-area-context`, que ya tenías instalados para las pestañas.
+
+---
+
+## 6. Pasos
+
+### Paso 1 — Agregar dos funciones al repositorio
+
+Abre `src/services/artesaniaService.ts` y agrega las dos funciones marcadas como NUEVAS. Tu archivo completo queda así:
+
+```ts
+// src/services/artesaniaService.ts
+import { getDatabase } from '../database/db';
+import { Artesano, Producto } from '../types/index';
+
+// ── Artesanos ──────────────────────────────────────────────────────────
+export async function obtenerArtesanos(): Promise<Artesano[]> {
+  const db = await getDatabase();
+  return db.getAllAsync<Artesano>('SELECT * FROM artesanos ORDER BY nombre');
+}
+
+// NUEVO (Parte 2): un artesano por su id
+export async function obtenerArtesanoPorId(id: number): Promise<Artesano | null> {
+  const db = await getDatabase();
+  return db.getFirstAsync<Artesano>('SELECT * FROM artesanos WHERE id = ?', id);
+}
+
+// ── Productos ──────────────────────────────────────────────────────────
+export async function obtenerProductos(): Promise<Producto[]> {
+  const db = await getDatabase();
+  return db.getAllAsync<Producto>('SELECT * FROM productos');
+}
+
+// NUEVO (Parte 2): los productos de un artesano
+export async function obtenerProductosPorArtesano(artesanoId: number): Promise<Producto[]> {
+  const db = await getDatabase();
+  return db.getAllAsync<Producto>(
+    'SELECT * FROM productos WHERE artesanoId = ?',
+    artesanoId
+  );
+}
+```
+
+**Qué aprender aquí:**
+- `getFirstAsync<T>(sql, param)` devuelve la primera fila o `null`.
+- El `?` es un **parámetro**: nunca concatenes valores directo en el SQL.
+
+### Paso 2 — Hook de artesanos (nuevo)
 
 Dos hooks: uno para la lista y otro para un artesano con sus productos.
 
@@ -780,9 +916,9 @@ export function useArtesano(id: number) {
 }
 ```
 
-**Qué aprender aquí:** el segundo hook recibe un `id` y lo pone en el arreglo de dependencias de `useEffect` (`[id]`). Si el `id` cambia, el hook vuelve a consultar.
+**Qué aprender aquí:** el segundo hook recibe un `id` y lo pone en las dependencias de `useEffect` (`[id]`). Si el `id` cambia, vuelve a consultar.
 
-### Paso 5 — Tipos de navegación
+### Paso 3 — Tipos de navegación
 
 ```ts
 // src/types/navigation.ts
@@ -792,9 +928,9 @@ export type ArtesanosStackParamList = {
 };
 ```
 
-**Qué aprender aquí:** este tipo describe qué pantallas existen en el Stack y qué parámetros recibe cada una. `PerfilArtesano` exige un `artesanoId` de tipo `number`. Así TypeScript nos avisa si navegamos mal.
+**Qué aprender aquí:** este tipo describe qué pantallas hay en el Stack y qué parámetros recibe cada una. `PerfilArtesano` exige un `artesanoId` de tipo `number`, y TypeScript nos avisa si navegamos mal.
 
-### Paso 6 — Pantalla lista de artesanos
+### Paso 4 — Pantalla lista de artesanos
 
 ```tsx
 // src/screens/ArtesanosScreen.tsx
@@ -861,7 +997,7 @@ const styles = StyleSheet.create({
 
 **Qué aprender aquí:** al tocar una tarjeta, `navigation.navigate('PerfilArtesano', { artesanoId: item.id })` abre la siguiente pantalla y le pasa el `id` del artesano como parámetro.
 
-### Paso 7 — Pantalla perfil del artesano
+### Paso 5 — Pantalla perfil del artesano
 
 Usa `ListHeaderComponent` para mostrar la ficha del artesano arriba y debajo su lista de piezas en subasta.
 
@@ -936,9 +1072,9 @@ const styles = StyleSheet.create({
 });
 ```
 
-**Qué aprender aquí:** `route.params.artesanoId` recupera el parámetro que envió la pantalla anterior. Ese `id` alimenta al hook `useArtesano`, que trae al artesano y sus productos en una sola consulta.
+**Qué aprender aquí:** `route.params.artesanoId` recupera el parámetro que envió la pantalla anterior. Ese `id` alimenta al hook `useArtesano`, que trae al artesano y sus productos en una sola carga.
 
-### Paso 8 — Navegación (App.tsx)
+### Paso 6 — Navegación (App.tsx)
 
 Agrega el Stack anidado y la pestaña nueva. Si ya tenías títulos o íconos personalizados, consérvalos: lo nuevo son las 3 importaciones de `native-stack`, la función `ArtesanosStack` y la pestaña **Artesanos**.
 
@@ -993,11 +1129,11 @@ export default function App() {
 }
 ```
 
-**Qué aprender aquí:** un **Stack anidado dentro de una pestaña** permite que la pestaña "Artesanos" tenga navegación interna (lista → perfil → regresar). Es un patrón muy común en apps reales.
+**Qué aprender aquí:** un **Stack dentro de una pestaña** permite que "Artesanos" tenga navegación interna (lista → perfil → regresar). Es un patrón muy común en apps reales.
 
 ---
 
-## 6. Probar la app
+## 7. Probar
 
 ```powershell
 npx expo start --clear
@@ -1005,39 +1141,35 @@ npx expo start --clear
 
 Verifica en el celular:
 
-- [ ] **Inicio** funciona igual que antes (ahora los datos vienen de SQLite).
 - [ ] Aparece la pestaña **Artesanos** con la lista de los 3 artesanos.
 - [ ] Al tocar un artesano se abre su **perfil** con sus piezas en subasta.
 - [ ] El botón de regresar funciona dentro de la pestaña Artesanos.
+- [ ] La pestaña **Inicio** sigue funcionando igual que en la Parte 1.
 
-Luego sube los cambios al repositorio:
+Sube los cambios:
 
 ```powershell
 git add .
-git commit -m "feat: conexion SQLite (expo-sqlite) y modulo Perfil de Artesano"
+git commit -m "feat: modulo Perfil de Artesano con navegacion Stack anidada"
 git push origin main
 ```
 
-> Si el `push` se rechaza porque el repositorio remoto tiene commits que no están en local, ejecuta primero `git pull origin main` y vuelve a empujar.
+---
+
+## 8. Conceptos clave
+
+- **Parámetros de ruta (`route.params`):** así se pasan datos de una pantalla a otra (aquí, el `artesanoId`).
+- **Stack anidado en Tabs:** una pestaña puede contener su propio navegador para tener historial (avanzar/regresar) interno.
+- **`useEffect` con dependencias (`[id]`):** el hook vuelve a consultar cuando cambia el `id`.
+- **`ListHeaderComponent`:** muestra una cabecera fija (la ficha del artesano) arriba de una `FlatList`.
 
 ---
 
-## 7. Conceptos clave
+## 9. Reto para el alumno (opcional)
 
-- **API asíncrona de `expo-sqlite`:** `openDatabaseAsync`, `execAsync`, `getAllAsync`, `getFirstAsync` y `runAsync`. Todas devuelven promesas, por eso usamos `async/await`.
-- **Persistencia:** una vez sembrada, la base de datos **vive en el dispositivo** y sobrevive a reinicios de la app. Ya no se pierde como pasaba con los arreglos en memoria.
-- **Llaves foráneas (`artesanoId`):** relacionan un producto con su artesano, igual que en una base de datos relacional de escritorio.
-- **Repository Pattern:** el repositorio (`artesaniaService.ts`) es el único que sabe consultar la base. Si mañana cambiamos SQLite por una API en la nube, solo se modifica esa capa.
-- **Custom Hooks:** separan la lógica de datos (cargar, manejar estado de carga) de la interfaz. Las pantallas quedan limpias y enfocadas en mostrar.
-- **Re-sembrado:** como `sembrarDatos` solo inserta si la tabla está vacía, si cambias los datos semilla **no se reflejarán** hasta que desinstales la app del celular (o borres su almacenamiento) y la vuelvas a abrir.
-
----
-
-## 8. Reto para el alumno (opcional)
-
-1. **Módulo de Ofertas:** crear funciones en el repositorio para insertar una puja en la tabla `ofertas` (`INSERT INTO ofertas ...`) y actualizar el `precioActual` del producto.
-2. **Contador en el perfil:** mostrar junto a cada artesano de la lista cuántas piezas tiene en subasta (consulta con `COUNT(*)` agrupado por `artesanoId`).
+1. **Módulo de Ofertas:** crear funciones en el repositorio para insertar una puja en la tabla `ofertas` y actualizar el `precioActual` del producto.
+2. **Contador en la lista:** mostrar junto a cada artesano cuántas piezas tiene en subasta (consulta con `COUNT(*)` agrupado por `artesanoId`).
 3. **Buscar artesanos:** agregar un cuadro de búsqueda que filtre por nombre o especialidad usando `WHERE nombre LIKE ?`.
----
 
+---
 *Programación Móvil — Universidad Politécnica de Querétaro — Mayo–Agosto 2026*
