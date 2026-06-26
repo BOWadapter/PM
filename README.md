@@ -813,7 +813,7 @@ src/
 ## 5. Dependencia
 
 ```powershell
-npx expo install @react-navigation/native-stack
+npx expo install "@react-navigation/native-stack@^6.0.0"
 ```
 
 > `native-stack` reutiliza `react-native-screens` y `react-native-safe-area-context`, que ya tenías instalados para las pestañas.
