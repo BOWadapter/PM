@@ -1171,5 +1171,348 @@ git push origin main
 2. **Contador en la lista:** mostrar junto a cada artesano cuántas piezas tiene en subasta (consulta con `COUNT(*)` agrupado por `artesanoId`).
 3. **Buscar artesanos:** agregar un cuadro de búsqueda que filtre por nombre o especialidad usando `WHERE nombre LIKE ?`.
 
+
+# Parte 3 — Servicios REST y Notificaciones
+
+**Proyecto:** Artisan Auction (`mi-proyecto-nuevo`)
+**Unidad II · 2.3 Servicios y notificaciones en aplicaciones móviles**
+**Prerrequisito:** SQLite conectado y módulo Artesanos funcionando (Parte 1 y Parte 2).
+
+---
+
+# SECCIÓN A — Marco conceptual
+
+## A.1 Fase 1: Consumo de servicios REST
+
+### El modelo cliente-servidor
+
+Hasta ahora la app es **autocontenida**: los datos viven en SQLite, dentro del dispositivo. Eso funciona, pero tiene un límite fundamental: *los datos de un usuario no existen para los demás*. En una app de subastas eso es fatal — si un comprador oferta desde su teléfono, el artesano nunca se entera.
+
+La solución es el modelo **cliente-servidor**: los datos se centralizan en un servidor remoto y los clientes (cada instancia de la app) se comunican con él mediante un protocolo común. Ese protocolo es **HTTP**, y el estilo arquitectónico que organiza esa comunicación es **REST** (Representational State Transfer). REST descansa en tres ideas:
+
+1. **Recursos identificados por URL**: `/api/artesanos/5` no es "una función", es la representación del artesano con id 5.
+2. **Verbos HTTP con semántica fija**: `GET` lee, `POST` crea, `PUT` actualiza, `DELETE` elimina. El mismo recurso, distintas operaciones — mapea 1:1 con el CRUD que ya se implementó en SQLite.
+3. **Sin estado (stateless)**: cada petición lleva toda la información necesaria; el servidor no "recuerda" al cliente entre peticiones. Esto es lo que después justifica el uso de JWT: como el servidor no guarda sesión, el cliente debe presentar su credencial en cada petición.
+
+### Por qué la interfaz común importa más que axios
+
+El punto central de la fase **no es hacer un `fetch`**. Es el **principio de inversión de dependencias** (la "D" de SOLID): el Hook no debe depender de una implementación concreta (SQLite o API), sino de una **abstracción** (`IArtesanoRepository`).
+
+La consecuencia práctica es demostrable: se cambia una línea en el `RepositoryFactory` y toda la app pasa de datos locales a datos remotos **sin tocar ni una pantalla ni un Hook**. Esa es la evidencia de que la arquitectura por capas construida desde la Parte 1 no era burocracia — era preparación para este momento.
+
+### Asincronía y los tres estados
+
+Diferencia técnica clave respecto a SQLite:
+
+- **SQLite es local**: latencia de milisegundos, prácticamente nunca falla.
+- **HTTP es red**: latencia impredecible (cientos de ms o segundos) y **falla con frecuencia** (sin señal, servidor caído, timeout).
+
+Por eso el Hook debe modelar explícitamente tres estados: `loading`, `error`, `success`. Conceptualmente: **la red es un recurso no confiable** y una app profesional nunca asume que la petición va a llegar. Técnicamente:
+
+- `axios.get<Artesano[]>()` devuelve una **Promise** — la petición sale, JavaScript sigue ejecutando, y el resultado llega "después". `async/await` es azúcar sintáctica sobre eso.
+- El genérico `<Artesano[]>` es el contrato TypeScript: le dice al compilador qué forma esperamos del JSON. Advertencia: es una *promesa del programador*, no una validación en runtime — si el servidor devuelve otra cosa, TypeScript no salva a nadie.
+- El `try/catch/finally` garantiza que `loading` siempre se apague, incluso en fallo. El error de novato clásico es un spinner infinito porque el `setLoading(false)` estaba solo en el camino feliz.
+
+## A.2 Fase 2: Notificaciones locales
+
+### Comunicación proactiva y ciclo de vida de la app
+
+Todo lo construido hasta ahora es **reactivo**: la app responde cuando el usuario la abre y toca algo. Las notificaciones invierten esa relación — la app **toma la iniciativa** y le habla al usuario aunque esté cerrada. Es el rasgo que distingue a una app móvil de una página web: la capacidad de existir fuera de la sesión activa.
+
+Dos tipos que no deben confundirse:
+
+| | Notificación **local** | Notificación **push** |
+|---|---|---|
+| Origen | La propia app, en el dispositivo | Un servidor remoto |
+| Infraestructura | Ninguna adicional | FCM (Google) / APNs (Apple) + backend |
+| Ejemplo en Artisan Auction | "Tu subasta guardada cierra en 5 min" | "Alguien superó tu oferta" |
+| Alcance de esta práctica | ✅ Esta fase | ❌ Extensión futura |
+
+El caso de uso elegido ("avísame cuando la subasta esté por cerrar") es deliberadamente local: el dato (fecha de cierre) ya está en el dispositivo, así que la app calcula el momento y **delega el aviso al sistema operativo**. Ese es el concepto técnico clave: la app no queda "esperando en segundo plano" (Android la mataría) — le entrega la tarea al SO, que sí vive siempre.
+
+### Permisos como contrato con el usuario
+
+Desde Android 13, las notificaciones son un **permiso en tiempo de ejecución**, igual que cámara o ubicación. El principio de diseño detrás: el usuario es dueño de su atención, y el SO actúa como intermediario que protege ese recurso. Una app que no verifica el permiso antes de programar la notificación no falla ruidosamente — la notificación simplemente nunca llega, que es el peor tipo de bug: silencioso.
+
+Flujo obligatorio: `requestPermissionsAsync()` → verificar `status === 'granted'` → solo entonces `scheduleNotificationAsync()`.
+
+### Las tres piezas de expo-notifications
+
+1. **El handler** (`setNotificationHandler`): define qué pasa si la notificación llega *con la app abierta*. Sin él, en foreground no se muestra nada y parece que "no funciona".
+2. **El scheduling** (`scheduleNotificationAsync`): recibe `content` (título y cuerpo, con datos dinámicos del modelo) y un `trigger` (segundos calculados a partir de `fechaCierre`). El cálculo `fechaCierre − ahora − 5 minutos` es un micro-ejercicio de fechas: timestamps en ms, conversión a segundos, y el caso borde de resultado negativo (subasta ya cerrada → no programar nada).
+3. **El SO como ejecutor**: una vez programada, la notificación sobrevive al cierre de la app. Es el sistema operativo quien la dispara — por eso la prueba exige cerrar la app y esperar.
+
+## A.3 El hilo que une ambas fases
+
+Las dos fases cubren el subtema **2.3 Servicios y notificaciones** y comparten una idea: la app deja de ser una isla. La Fase 1 la conecta con *otros sistemas* (el servidor); la Fase 2 la conecta con *el usuario ausente* (a través del SO). En términos de la competencia de la asignatura, es el paso de "desarrollar una aplicación" a "integrar una solución": la app ahora participa en un ecosistema — servidor, sistema operativo, otros usuarios — en lugar de vivir sola en un teléfono.
+
+---
+
+# SECCIÓN B — Implementación paso a paso
+
+## B.1 Fase 1 — Consumo de servicios REST
+
+### Paso 1: Instalar dependencias
+
+```powershell
+cd C:\Users\adx\Documents\Dev\PM\mi-proyecto-nuevo
+npx expo install axios
+```
+
+### Paso 2: Definir la interfaz común del Repository
+
+```typescript
+// src/types/IArtesanoRepository.ts
+import { Artesano } from './Artesano';
+
+export interface IArtesanoRepository {
+  getAll(): Promise<Artesano[]>;
+  getById(id: number): Promise<Artesano | null>;
+  create(artesano: Omit<Artesano, 'id'>): Promise<number>;
+  update(id: number, artesano: Partial<Artesano>): Promise<void>;
+  delete(id: number): Promise<void>;
+}
+```
+
+Ajustar el Repository de SQLite existente para que la implemente:
+
+```typescript
+// src/services/ArtesanoRepository.ts
+export class ArtesanoRepository implements IArtesanoRepository {
+  // ... implementación existente con expo-sqlite
+}
+```
+
+### Paso 3: Crear el Repository que consume la API
+
+```typescript
+// src/services/ArtesanoRepositoryAPI.ts
+import axios from 'axios';
+import { Artesano } from '../types/Artesano';
+import { IArtesanoRepository } from '../types/IArtesanoRepository';
+
+const API_URL = 'http://localhost:3000/api/artesanos'; // ajustar cuando backend-pm esté verificado
+
+export class ArtesanoRepositoryAPI implements IArtesanoRepository {
+  async getAll(): Promise<Artesano[]> {
+    const { data } = await axios.get<Artesano[]>(API_URL);
+    return data;
+  }
+
+  async getById(id: number): Promise<Artesano | null> {
+    try {
+      const { data } = await axios.get<Artesano>(`${API_URL}/${id}`);
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  async create(artesano: Omit<Artesano, 'id'>): Promise<number> {
+    const { data } = await axios.post<{ id: number }>(API_URL, artesano);
+    return data.id;
+  }
+
+  async update(id: number, artesano: Partial<Artesano>): Promise<void> {
+    await axios.put(`${API_URL}/${id}`, artesano);
+  }
+
+  async delete(id: number): Promise<void> {
+    await axios.delete(`${API_URL}/${id}`);
+  }
+}
+```
+
+> **Nota:** si `backend-pm` aún no tiene `/health` verificado, usar temporalmente `json-server` con un `db.json` de artesanos para no bloquear la práctica, y cambiar `API_URL` cuando el backend esté listo.
+> **Nota Android:** desde el dispositivo físico, `localhost` apunta al teléfono, no a la PC. Usar la IP local de la máquina de desarrollo (p. ej. `http://192.168.x.x:3000`), visible con `ipconfig`.
+
+### Paso 4: Actualizar el Hook con estados explícitos
+
+```typescript
+// src/hooks/useArtesanos.ts
+import { useState, useEffect } from 'react';
+import { Artesano } from '../types/Artesano';
+import { IArtesanoRepository } from '../types/IArtesanoRepository';
+
+export function useArtesanos(repository: IArtesanoRepository) {
+  const [artesanos, setArtesanos] = useState<Artesano[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const cargar = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await repository.getAll();
+      setArtesanos(data);
+    } catch (err) {
+      setError('No se pudo conectar con el servicio. Intenta más tarde.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    cargar();
+  }, []);
+
+  return { artesanos, loading, error, recargar: cargar };
+}
+```
+
+### Paso 5: Reflejar los estados en la pantalla
+
+```tsx
+// src/screens/ArtesanosScreen.tsx (fragmento)
+if (loading) return <ActivityIndicator size="large" style={{ flex: 1 }} />;
+if (error) return <Text style={{ textAlign: 'center', margin: 20 }}>{error}</Text>;
+```
+
+### Paso 6: Factory para intercambiar la fuente de datos
+
+```typescript
+// src/services/RepositoryFactory.ts
+import { ArtesanoRepository } from './ArtesanoRepository';
+import { ArtesanoRepositoryAPI } from './ArtesanoRepositoryAPI';
+
+const USE_API = true; // false para volver a SQLite local
+
+export const artesanoRepository = USE_API
+  ? new ArtesanoRepositoryAPI()
+  : new ArtesanoRepository();
+```
+
+## B.2 Fase 2 — Notificaciones locales
+
+### Paso 1: Instalar
+
+```powershell
+npx expo install expo-notifications expo-device expo-constants
+```
+
+### Paso 2: Configurar el manejador y los permisos
+
+```typescript
+// src/services/NotificationService.ts
+import * as Notifications from 'expo-notifications';
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
+
+export async function solicitarPermisos(): Promise<boolean> {
+  const { status } = await Notifications.requestPermissionsAsync();
+  return status === 'granted';
+}
+```
+
+### Paso 3: Programar la notificación con datos reales
+
+```typescript
+// src/services/NotificationService.ts (continúa)
+export async function programarNotificacionCierre(
+  productoNombre: string,
+  fechaCierre: Date
+) {
+  const segundosRestantes = Math.floor((fechaCierre.getTime() - Date.now()) / 1000);
+  if (segundosRestantes <= 0) return; // subasta ya cerrada: no programar
+
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: `¡Subasta de "${productoNombre}" por cerrar!`,
+      body: 'Quedan menos de 5 minutos para que termine la subasta.',
+    },
+    trigger: { seconds: Math.max(segundosRestantes - 300, 5) },
+  });
+}
+```
+
+### Paso 4: Usarlo en la pantalla de detalle
+
+```tsx
+// src/screens/DetalleProductoScreen.tsx (fragmento)
+useEffect(() => {
+  (async () => {
+    const permitido = await solicitarPermisos();
+    if (permitido && producto.fechaCierre) {
+      await programarNotificacionCierre(producto.nombre, new Date(producto.fechaCierre));
+    }
+  })();
+}, [producto]);
+```
+
+### Paso 5: Probar en dispositivo físico
+
+- Android 13+: confirmar que aparece el diálogo de permiso al abrir la pantalla.
+- Cerrar la app y esperar el trigger — Expo Go debe mostrar la notificación en la barra del sistema.
+- Si no aparece: revisar que `fechaCierre` sea un dato real del modelo, no un valor de prueba en el pasado.
+
+## B.3 Control de versiones
+
+```powershell
+git add .
+git commit -m "feat: consumo de servicios REST con interfaz Repository intercambiable"
+git commit -m "feat: notificaciones locales de cierre de subasta con expo-notifications"
+git push origin main
+```
+
+---
+
+# SECCIÓN C — Actividad para alumnos
+
+## ACTIVIDAD — SERVICIOS REST Y NOTIFICACIONES
+**Unidad II · Individual, sobre el proyecto integrador**
+
+### OBJETIVO
+Conectar la capa Repository de su app (hoy solo habla con SQLite) a un servicio HTTP externo, y agregar una notificación local basada en datos reales del proyecto.
+
+### FASE 1 — Consumo de servicios REST
+1. Instalen el cliente HTTP: `npx expo install axios` (o `fetch` nativo, sin instalación).
+2. Creen una clase que implemente **la misma interfaz** que su Repository de SQLite. El Hook no debe enterarse de si los datos vienen de SQLite o de una API.
+3. En el Hook, manejen tres estados explícitos: `loading`, `error`, `success`.
+4. Muestren `ActivityIndicator` durante la carga y un mensaje claro si falla la petición (sin tumbar la app).
+
+*Si su backend aún no está estable, usen una API mock (`json-server` local) para no bloquear el avance.*
+
+**Requisitos:** interfaz común entre ambos repositorios · tipado TypeScript de la respuesta · manejo visible de los 3 estados en pantalla.
+
+### FASE 2 — Notificaciones locales
+1. `npx expo install expo-notifications`
+2. Soliciten permiso de notificaciones (obligatorio en Android 13+).
+3. Programen con `scheduleNotificationAsync` una notificación que avise cuando una subasta esté por cerrar, usando la fecha de cierre real del producto.
+4. Título dinámico con el nombre del producto, cuerpo con el tiempo restante.
+
+**Requisitos:** permisos verificados antes de programar · contenido dinámico del modelo, no texto fijo · prueba en dispositivo físico vía Expo Go.
+
+### ENTREGABLE
+- Repo en GitHub, **2 commits descriptivos** (uno por fase).
+- Capturas: petición exitosa con datos remotos · pantalla de error simulado · notificación recibida.
+- README con diagrama actualizado (`Screens → Hooks → Repository → [SQLite | API]`) y reflexión: ventajas/riesgos de tener dos fuentes de datos intercambiables y qué aprendieron sobre permisos.
+
+### EVALUACIÓN
+| Criterio | % |
+|---|---|
+| Fase 1 — Consumo de API con manejo de estados | 35% |
+| Fase 1 — Interfaz común / arquitectura por capas | 15% |
+| Fase 2 — Notificación funcional con datos dinámicos | 25% |
+| Fase 2 — Manejo correcto de permisos | 10% |
+| Documentación y reflexión | 15% |
+
+---
+
+# SECCIÓN D — Checklist de cierre de Unidad II
+
+- [ ] `IArtesanoRepository` implementada por SQLite y por API sin cambiar los Hooks.
+- [ ] Estados `loading` / `error` / `success` visibles en pantalla.
+- [ ] Permiso de notificaciones solicitado y verificado.
+- [ ] Notificación con título/cuerpo dinámico, no texto fijo.
+- [ ] Capturas del flujo completo para el README.
+- [ ] Diagrama actualizado: `Screens → Hooks → Repository → [SQLite | API]`.
+- [ ] Commits descriptivos pusheados a `main`.
+
 ---
 *Programación Móvil — Universidad Politécnica de Querétaro — Mayo–Agosto 2026*
