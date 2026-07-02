@@ -1257,6 +1257,7 @@ Las dos fases cubren el subtema **2.3 Servicios y notificaciones** y comparten u
 ```powershell
 cd C:\Users\adx\Documents\Dev\PM\mi-proyecto-nuevo
 npx expo install axios
+npm install -g json-server
 ```
 
 ### Paso 2: Definir la interfaz común del Repository
