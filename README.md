@@ -1516,4 +1516,630 @@ Conectar la capa Repository de su app (hoy solo habla con SQLite) a un servicio 
 - [ ] Commits descriptivos pusheados a `main`.
 
 ---
+
+# Práctica de Repaso — Artisan Auction con PostgreSQL
+
+**Asignatura:** Programación Móvil (UPQDPEFO002) · Grupo S205 · 9.° cuatrimestre
+**Objetivo:** Reconstruir el flujo completo de la app **Artisan Auction** sustituyendo el mock de `json-server` por un backend real **Node/Express + PostgreSQL**, manteniendo intacta la arquitectura de 4 capas (Pantallas → Hooks → Repositorio → API).
+
+**Competencia que se ejercita:** desarrollo e integración de soluciones móviles con consumo de API propia, base de datos relacional y protección con JWT (Requerimientos Mínimos PI: *"La app móvil debe trabajar con una API propia como mínimo y su respectiva Base de Datos"*, *"Protección de API con JWT"*).
+
+**Idea clave del repaso:** como definimos el contrato REST con `json-server`, la migración a PostgreSQL es un **cambio de URL** en el repositorio. Todo lo demás (hooks, pantallas, navegación) no se toca.
+
+---
+
+## Requisitos previos
+
+- App Expo SDK 54 funcionando en dispositivo físico (verificar: `Select-String '"expo":' package.json`)
+- Node.js instalado en la PC
+- VS Code y PowerShell
+- PC y teléfono en la **misma red WiFi**
+
+---
+
+## Fase 1 — Instalar PostgreSQL (Windows)
+
+1. Descargar el instalador desde `https://www.postgresql.org/download/windows/` (versión 16.x).
+2. Durante la instalación:
+   - Anotar la **contraseña del usuario `postgres`** (la usaremos en `.env`).
+   - Puerto por defecto: `5432`.
+   - Instalar también **pgAdmin 4** (viene incluido).
+3. Verificar en PowerShell:
+
+```powershell
+& "C:\Program Files\PostgreSQL\16\bin\psql.exe" --version
+```
+
+> **Tip:** si quieres usar `psql` sin la ruta completa, agrega `C:\Program Files\PostgreSQL\16\bin` a la variable de entorno PATH.
+
+---
+
+## Fase 2 — Crear la base de datos y las tablas
+
+Abrir consola de PostgreSQL:
+
+```powershell
+& "C:\Program Files\PostgreSQL\16\bin\psql.exe" -U postgres
+```
+
+Ejecutar el siguiente script (crea la BD, las 4 tablas y datos semilla):
+
+```sql
+CREATE DATABASE artisan_auction;
+\c artisan_auction
+
+-- Usuarios con 3 roles: admin, artesano, comprador
+CREATE TABLE usuarios (
+  id SERIAL PRIMARY KEY,
+  nombre VARCHAR(100) NOT NULL,
+  correo VARCHAR(120) UNIQUE NOT NULL,
+  contrasena_hash TEXT NOT NULL,
+  rol VARCHAR(20) NOT NULL DEFAULT 'comprador'
+      CHECK (rol IN ('admin', 'artesano', 'comprador')),
+  creado_en TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE artesanos (
+  id SERIAL PRIMARY KEY,
+  nombre VARCHAR(100) NOT NULL,
+  especialidad VARCHAR(100) NOT NULL,
+  ubicacion VARCHAR(100),
+  descripcion TEXT
+);
+
+CREATE TABLE productos (
+  id SERIAL PRIMARY KEY,
+  artesano_id INTEGER NOT NULL REFERENCES artesanos(id) ON DELETE CASCADE,
+  nombre VARCHAR(120) NOT NULL,
+  descripcion TEXT,
+  precio_inicial NUMERIC(10,2) NOT NULL CHECK (precio_inicial >= 0),
+  activo BOOLEAN DEFAULT TRUE
+);
+
+CREATE TABLE ofertas (
+  id SERIAL PRIMARY KEY,
+  producto_id INTEGER NOT NULL REFERENCES productos(id) ON DELETE CASCADE,
+  usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+  monto NUMERIC(10,2) NOT NULL CHECK (monto > 0),
+  fecha TIMESTAMP DEFAULT NOW()
+);
+
+-- Datos semilla (mismos que db.json para que la app no note el cambio)
+INSERT INTO artesanos (nombre, especialidad, ubicacion, descripcion) VALUES
+('María Hernández', 'Alfarería', 'Amealco, Querétaro', 'Muñecas Lele y barro tradicional'),
+('José Ramírez', 'Textiles', 'Tolimán, Querétaro', 'Rebozos y bordados otomíes'),
+('Lucía Torres', 'Vara de sauce', 'Tequisquiapan, Querétaro', 'Cestería artesanal');
+
+INSERT INTO productos (artesano_id, nombre, descripcion, precio_inicial) VALUES
+(1, 'Muñeca Lele grande', 'Muñeca artesanal 40 cm', 350.00),
+(2, 'Rebozo de seda', 'Rebozo tejido a mano', 1200.00),
+(3, 'Canasta de sauce', 'Canasta mediana tejida', 180.00);
+```
+
+Verificar:
+
+```sql
+SELECT * FROM artesanos;
+\q
+```
+
+---
+
+## Fase 3 — Backend Node/Express (`backend-pm/`)
+
+### 3.1 Crear el proyecto
+
+```powershell
+cd C:\Users\adx\Documents\Dev\PM
+mkdir backend-pm
+cd backend-pm
+npm init -y
+npm install express pg cors dotenv bcryptjs jsonwebtoken
+```
+
+> **Recordatorio de clase:** usamos `bcryptjs` (JS puro) y no `bcrypt`, para evitar fallos de compilación de módulos nativos en Windows.
+
+Estructura final:
+
+```
+backend-pm/
+├── .env
+├── package.json
+└── src/
+    ├── index.js
+    ├── db.js
+    ├── middleware/
+    │   └── auth.js
+    └── rutas/
+        ├── auth.js
+        ├── artesanos.js
+        └── productos.js
+```
+
+### 3.2 Variables de entorno — `.env`
+
+```env
+PORT=3000
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=TU_CONTRASENA_DE_POSTGRES
+DB_NAME=artisan_auction
+JWT_SECRET=clave_super_secreta_s205
+```
+
+> `.env` **nunca se sube a GitHub**. Agregar a `.gitignore`: `node_modules/` y `.env`.
+
+### 3.3 Conexión a PostgreSQL — `src/db.js`
+
+```javascript
+const { Pool } = require('pg');
+require('dotenv').config();
+
+const pool = new Pool({
+  host: process.env.DB_HOST,
+  port: process.env.DB_PORT,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+});
+
+module.exports = pool;
+```
+
+### 3.4 Middleware de protección JWT — `src/middleware/auth.js`
+
+```javascript
+const jwt = require('jsonwebtoken');
+
+function verificarToken(req, res, next) {
+  const encabezado = req.headers['authorization']; // "Bearer <token>"
+  const token = encabezado && encabezado.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Token no proporcionado' });
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, usuario) => {
+    if (err) {
+      return res.status(403).json({ error: 'Token inválido o expirado' });
+    }
+    req.usuario = usuario; // { id, rol }
+    next();
+  });
+}
+
+module.exports = verificarToken;
+```
+
+### 3.5 Rutas de autenticación — `src/rutas/auth.js`
+
+```javascript
+const express = require('express');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const pool = require('../db');
+
+const router = express.Router();
+
+// POST /auth/registro
+router.post('/registro', async (req, res) => {
+  try {
+    const { nombre, correo, contrasena, rol } = req.body;
+    if (!nombre || !correo || !contrasena) {
+      return res.status(400).json({ error: 'Faltan campos obligatorios' });
+    }
+
+    const hash = await bcrypt.hash(contrasena, 10);
+    const resultado = await pool.query(
+      `INSERT INTO usuarios (nombre, correo, contrasena_hash, rol)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, nombre, correo, rol`,
+      [nombre, correo, hash, rol || 'comprador']
+    );
+
+    res.status(201).json(resultado.rows[0]);
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'El correo ya está registrado' });
+    }
+    res.status(500).json({ error: 'Error en el servidor' });
+  }
+});
+
+// POST /auth/login
+router.post('/login', async (req, res) => {
+  try {
+    const { correo, contrasena } = req.body;
+    const resultado = await pool.query(
+      'SELECT * FROM usuarios WHERE correo = $1',
+      [correo]
+    );
+
+    if (resultado.rows.length === 0) {
+      return res.status(401).json({ error: 'Credenciales incorrectas' });
+    }
+
+    const usuario = resultado.rows[0];
+    const coincide = await bcrypt.compare(contrasena, usuario.contrasena_hash);
+    if (!coincide) {
+      return res.status(401).json({ error: 'Credenciales incorrectas' });
+    }
+
+    const token = jwt.sign(
+      { id: usuario.id, rol: usuario.rol },
+      process.env.JWT_SECRET,
+      { expiresIn: '2h' }
+    );
+
+    res.json({
+      token,
+      usuario: { id: usuario.id, nombre: usuario.nombre, rol: usuario.rol },
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Error en el servidor' });
+  }
+});
+
+module.exports = router;
+```
+
+### 3.6 Rutas de artesanos — `src/rutas/artesanos.js`
+
+Mismo contrato que `json-server`: `GET /artesanos` y `GET /artesanos/:id`, para que `useArtesanos` y `useArtesano(id)` funcionen sin cambios.
+
+```javascript
+const express = require('express');
+const pool = require('../db');
+
+const router = express.Router();
+
+// GET /artesanos
+router.get('/', async (req, res) => {
+  try {
+    const resultado = await pool.query(
+      'SELECT * FROM artesanos ORDER BY nombre'
+    );
+    res.json(resultado.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Error al consultar artesanos' });
+  }
+});
+
+// GET /artesanos/:id
+router.get('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const resultado = await pool.query(
+      'SELECT * FROM artesanos WHERE id = $1',
+      [id]
+    );
+
+    if (resultado.rows.length === 0) {
+      return res.status(404).json({ error: 'Artesano no encontrado' });
+    }
+    res.json(resultado.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Error al consultar el artesano' });
+  }
+});
+
+module.exports = router;
+```
+
+### 3.7 Rutas de productos (protegidas con JWT) — `src/rutas/productos.js`
+
+```javascript
+const express = require('express');
+const pool = require('../db');
+const verificarToken = require('../middleware/auth');
+
+const router = express.Router();
+
+// Todas las rutas de productos requieren token
+router.use(verificarToken);
+
+// GET /productos
+router.get('/', async (req, res) => {
+  try {
+    const resultado = await pool.query(
+      `SELECT p.*, a.nombre AS artesano
+       FROM productos p
+       JOIN artesanos a ON a.id = p.artesano_id
+       WHERE p.activo = TRUE
+       ORDER BY p.id`
+    );
+    res.json(resultado.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Error al consultar productos' });
+  }
+});
+
+// POST /productos — solo rol artesano o admin
+router.post('/', async (req, res) => {
+  try {
+    if (req.usuario.rol === 'comprador') {
+      return res.status(403).json({ error: 'Rol sin permisos para publicar' });
+    }
+
+    const { artesano_id, nombre, descripcion, precio_inicial } = req.body;
+    const resultado = await pool.query(
+      `INSERT INTO productos (artesano_id, nombre, descripcion, precio_inicial)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [artesano_id, nombre, descripcion, precio_inicial]
+    );
+    res.status(201).json(resultado.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Error al crear el producto' });
+  }
+});
+
+// POST /productos/:id/ofertas — pujar en una subasta
+router.post('/:id/ofertas', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { monto } = req.body;
+
+    const resultado = await pool.query(
+      `INSERT INTO ofertas (producto_id, usuario_id, monto)
+       VALUES ($1, $2, $3) RETURNING *`,
+      [id, req.usuario.id, monto]
+    );
+    res.status(201).json(resultado.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Error al registrar la oferta' });
+  }
+});
+
+module.exports = router;
+```
+
+### 3.8 Servidor principal — `src/index.js`
+
+```javascript
+const express = require('express');
+const cors = require('cors');
+require('dotenv').config();
+
+const pool = require('./db');
+const rutasAuth = require('./rutas/auth');
+const rutasArtesanos = require('./rutas/artesanos');
+const rutasProductos = require('./rutas/productos');
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// Endpoint de salud: confirma que Express habla con PostgreSQL
+app.get('/health', async (req, res) => {
+  try {
+    const resultado = await pool.query('SELECT NOW()');
+    res.json({ estado: 'ok', bd: 'conectada', hora: resultado.rows[0].now });
+  } catch (err) {
+    res.status(500).json({ estado: 'error', bd: 'sin conexión' });
+  }
+});
+
+app.use('/auth', rutasAuth);
+app.use('/artesanos', rutasArtesanos);
+app.use('/productos', rutasProductos);
+
+const PORT = process.env.PORT || 3000;
+// 0.0.0.0 permite conexiones desde el teléfono en la misma red
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`API escuchando en el puerto ${PORT}`);
+});
+```
+
+Agregar script en `package.json`:
+
+```json
+"scripts": {
+  "start": "node src/index.js"
+}
+```
+
+Arrancar:
+
+```powershell
+npm start
+```
+
+---
+
+## Fase 4 — Probar la API desde PowerShell
+
+**1. Salud (Express ↔ PostgreSQL):**
+
+```powershell
+Invoke-RestMethod http://localhost:3000/health
+```
+
+Esperado: `estado: ok, bd: conectada`.
+
+**2. Artesanos (contrato idéntico a json-server):**
+
+```powershell
+Invoke-RestMethod http://localhost:3000/artesanos
+Invoke-RestMethod http://localhost:3000/artesanos/1
+```
+
+**3. Registro y login:**
+
+```powershell
+$cuerpo = @{ nombre="Ana"; correo="ana@upq.mx"; contrasena="123456"; rol="artesano" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://localhost:3000/auth/registro -Body $cuerpo -ContentType "application/json"
+
+$login = @{ correo="ana@upq.mx"; contrasena="123456" } | ConvertTo-Json
+$respuesta = Invoke-RestMethod -Method Post -Uri http://localhost:3000/auth/login -Body $login -ContentType "application/json"
+$token = $respuesta.token
+```
+
+**4. Ruta protegida con el token:**
+
+```powershell
+Invoke-RestMethod http://localhost:3000/productos -Headers @{ Authorization = "Bearer $token" }
+```
+
+Sin token debe responder **401**; con token inválido, **403**. Ambos casos son evidencia del requisito *Protección de API con JWT*.
+
+---
+
+## Fase 5 — Conectar la app móvil (el famoso "URL swap")
+
+**1. Obtener la IP local de la PC** (recuerda: `localhost` en el teléfono apunta al propio teléfono, no a tu PC):
+
+```powershell
+ipconfig
+```
+
+Buscar `Dirección IPv4` del adaptador WiFi, p. ej. `192.168.1.74`.
+
+**2. Cambiar la URL base del repositorio.** Es la **única línea que se modifica** en toda la app:
+
+```typescript
+// src/repositorios/ArtesanoRepositorio.ts
+// Antes (json-server):
+// const URL_BASE = 'http://192.168.1.74:3001';
+
+// Ahora (Express + PostgreSQL):
+const URL_BASE = 'http://192.168.1.74:3000';
+```
+
+**3. No tocar nada más.** `useArtesanos`, `useArtesano(id)` (con `cargando`, `error`, `recargar`), `ArtesanosScreen` y la navegación siguen igual: eso demuestra el valor del patrón Repositorio.
+
+**4. Permitir el puerto en el Firewall de Windows** (una sola vez, PowerShell como administrador):
+
+```powershell
+New-NetFirewallRule -DisplayName "API Artisan Auction" -Direction Inbound -Protocol TCP -LocalPort 3000 -Action Allow
+```
+
+**5. Probar desde el navegador del teléfono** antes de abrir la app: `http://192.168.1.74:3000/health`. Si esto no responde, el problema es de red/firewall, no de código.
+
+**6. Arrancar la app:**
+
+```powershell
+cd C:\Users\adx\Documents\Dev\PM\mi-proyecto-nuevo
+npx expo start
+```
+
+Escanear el QR con Expo Go y verificar que la lista de artesanos ahora proviene de PostgreSQL.
+
+---
+
+## Fase 6 — Evidencias y commit
+
+```powershell
+cd C:\Users\adx\Documents\Dev\PM
+git add backend-pm/
+git commit -m "feat: backend Express + PostgreSQL con JWT (practica de repaso)" --no-edit
+git push origin main
+```
+
+### Checklist de evidencias (para el alumno)
+
+- [ ] Captura de `SELECT * FROM artesanos;` en psql o pgAdmin
+- [ ] Captura de `/health` respondiendo `bd: conectada`
+- [ ] Captura de `Invoke-RestMethod` con login exitoso y token
+- [ ] Captura de `/productos` respondiendo 401 sin token y 200 con token
+- [ ] Captura de la app en el dispositivo físico mostrando artesanos desde PostgreSQL
+- [ ] Commit en GitHub con el backend
+
+### Errores comunes
+
+| Síntoma | Causa | Solución |
+|---|---|---|
+| `password authentication failed` | Contraseña incorrecta en `.env` | Verificar contraseña de `postgres` |
+| App muestra error de red | URL con `localhost` o firewall | Usar IP de `ipconfig` y regla de firewall |
+| `ECONNREFUSED 5432` | PostgreSQL detenido | Iniciar servicio: `Start-Service postgresql-x64-16` |
+| 401 en `/productos` | Falta encabezado `Authorization` | Enviar `Bearer <token>` |
+| Crash en Expo Go | SDK ≠ 54 | `Select-String '"expo":' package.json` |
+
+### Reto extra (opcional)
+
+Proteger también `GET /artesanos` con `verificarToken` y modificar el repositorio para leer el token desde `expo-secure-store` y enviarlo en el encabezado. Esto conecta esta práctica con la fase de autenticación biométrica.
+
+---
+
+## Anexo — Escalabilidad de la arquitectura
+
+### La estructura actual, en corto
+
+```
+mi-proyecto-nuevo/                  backend-pm/
+├── src/                            ├── .env
+│   ├── pantallas/    ← UI          └── src/
+│   ├── hooks/        ← estado          ├── index.js      ← arranque
+│   ├── repositorios/ ← acceso a datos  ├── db.js         ← conexión
+│   └── navegacion/                     ├── middleware/   ← JWT
+└── App.tsx                             └── rutas/        ← endpoints
+```
+
+**Idea rectora:** cada capa solo conoce a la capa de abajo.
+
+- La pantalla no sabe si los datos vienen de SQLite, json-server o PostgreSQL; solo consume el hook.
+- El hook no sabe de URLs; solo llama al repositorio.
+- Por eso la migración de esta práctica fue **una sola línea**.
+- En el backend pasa igual: `index.js` no sabe de SQL, solo monta rutas; las rutas hablan con el pool.
+
+### La versión escalada del backend
+
+En el backend actual las rutas hacen dos trabajos a la vez: reciben el HTTP **y** ejecutan el SQL. Eso está bien para 3 tablas. Cuando la app crece, cada recurso se separa en piezas con una sola responsabilidad:
+
+```
+backend-pm/
+└── src/
+    ├── index.js
+    ├── config/
+    │   └── db.js
+    ├── middleware/
+    │   ├── auth.js
+    │   └── validacion.js
+    └── modulos/
+        ├── artesanos/
+        │   ├── artesanos.rutas.js        ← solo HTTP: lee req, responde res
+        │   ├── artesanos.controlador.js  ← orquesta: valida, decide códigos de estado
+        │   ├── artesanos.servicio.js     ← reglas de negocio
+        │   └── artesanos.repositorio.js  ← solo SQL
+        ├── productos/
+        │   └── (mismas 4 piezas)
+        ├── ofertas/
+        │   └── (mismas 4 piezas)
+        └── auth/
+            └── (mismas 4 piezas)
+```
+
+Esto se llama organización **por módulo/feature** en lugar de por tipo de archivo.
+
+**Beneficios concretos:**
+
+1. **Reglas de negocio con un hogar.** Hoy, "una oferta debe superar a la anterior" no tiene dónde vivir sin ensuciar la ruta. En la versión escalada vive en `ofertas.servicio.js`, y se puede probar con Jest sin levantar Express ni PostgreSQL.
+
+2. **El repositorio del backend es espejo del de la app.** `artesanos.repositorio.js` es el único archivo que conoce SQL. Si mañana se migra a MySQL o a un ORM como Prisma, se reescribe solo esa pieza — el mismo "URL swap" de esta práctica, pero del otro lado del cable. Es el mismo patrón Repositorio que ya conocen, aplicado en el servidor.
+
+3. **Trabajo en equipo sin colisiones.** Un integrante toma el módulo `ofertas`, otro `productos`, y sus commits no se pisan porque no comparten archivos. Directamente aplicable al proyecto integrador en equipos.
+
+### La versión escalada del frontend
+
+El escalamiento equivalente en la app es agrupar **por feature** en vez de por capa:
+
+```
+src/
+├── features/
+│   ├── artesanos/
+│   │   ├── pantallas/
+│   │   ├── hooks/
+│   │   └── ArtesanoRepositorio.ts
+│   ├── subastas/
+│   └── auth/
+├── nucleo/            ← lo compartido: cliente HTTP, tema, tipos
+└── navegacion/
+```
+
+Esto conecta con la migración pendiente a `IArtesanoRepository` + `RepositoryFactory`: es el paso que formaliza esta estructura, porque el hook dependería de una **interfaz** y la fábrica decide si entrega la implementación SQLite o la de API.
+
+### Mensaje clave
+
+**La estructura simple y la compleja son el mismo patrón a distinta escala.** No hay que reescribir nada para crecer; solo subdividir capas que ya existen. La arquitectura de 4 capas (Pantallas → Hooks → Repositorio → Datos) sigue intacta en ambas versiones — lo único que cambia es cuántos archivos implementan cada capa.
+---
 *Programación Móvil — Universidad Politécnica de Querétaro — Mayo–Agosto 2026*
